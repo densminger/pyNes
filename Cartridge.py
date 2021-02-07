@@ -81,7 +81,7 @@ class Cartridge:
 
     def ppuWrite(self, addr, data):
         mapped_addr = self.mapper.ppuMapWrite(addr)
-        if mapped_addr:
+        if mapped_addr is not None:
             self.chrMemory[mapped_addr] = data
             return data
         return None
