@@ -16,6 +16,11 @@ from Mapper_000 import Mapper_000
 #     ]
 
 class Cartridge:
+    MIRROR_HORIZONTAL   = 0
+    MIRROR_VERTICAL     = 1
+    MIRROR_ONESCREEN_LO = 2
+    MIRROR_ONESCREEN_HI = 3
+
     def __init__(self, filename):
         def readFile(filename):
             try:
@@ -29,6 +34,7 @@ class Cartridge:
                 f.read(512)
 
             self.mapperID = ((header[4] >> 4) << 4) | (header[3] >> 4)
+            self.mirror = self.MIRROR_VERTICAL if (header[3] & 0x01) > 0 else self.MIRROR_HORIZONTAL
 
             fileType = 1    # assume filetype 1 for now
 

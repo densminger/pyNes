@@ -24,7 +24,7 @@ class Nes(GameEngine.GameEngine):
 
         self.selectedPalette = 0
 
-        self.cartridge = Cartridge.Cartridge('smb.nes')
+        self.cartridge = Cartridge.Cartridge('nestest.nes')
         self.nes.insertCartridge(self.cartridge)
 
         self.mapAsm = self.cpu.disassemble(0x0000, 0xFFFF)
@@ -81,6 +81,19 @@ class Nes(GameEngine.GameEngine):
         self.screen.blit(self.nes.ppu.GetPatternTable(0, self.selectedPalette), (516, 348))
         self.screen.blit(self.nes.ppu.GetPatternTable(1, self.selectedPalette), (648, 348))
         self.screen.blit(pygame.transform.scale(self.nes.ppu.GetScreen(), (512, 480)), (0, 0))
+
+        hex = lambda x,y:'{word:0{padding}X}'.format(word=x if x >=0 else x+256, padding=y)
+        scr = pygame.Surface((256, 240))
+        pat = self.nes.ppu.GetPatternTable(0, self.selectedPalette)
+        for y in range(30):
+            for x in range(32):
+                # s = hex(self.nes.ppu.tblName[0][y * 32 + x], 2)
+                # if s == "24": s = "  "
+                # self.draw_string(x * 16, y * 16, s)
+                tileid = self.nes.ppu.tblName[0][y * 32 + x]
+                scr.blit(pat, (x * 8, y * 8), area=pygame.Rect(((tileid & 0x0F) << 3, ((tileid >> 4) & 0x0F) << 3), (8, 8)))
+        self.screen.blit(pygame.transform.scale(scr, (256*2, 240*2)), (0, 0))
+
         if not self.emulationRun or (self.emulationRun and completed_frame):
             pygame.display.update()
 

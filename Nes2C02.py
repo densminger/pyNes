@@ -65,7 +65,6 @@ class Nes2C02:
                     tile_msb = self.ppuRead(i * 0x1000 + offset + row + 8)
                     for col in range(8):
                         pixel = ((tile_msb & 0x01) << 1) | (tile_lsb & 0x01)
-                        #pixel = (tile_lsb & 0x01) + (tile_msb & 0x01)
                         tile_lsb >>= 1
                         tile_msb >>= 1
                         self.sprPatternTable[i].set_at(
@@ -150,7 +149,7 @@ class Nes2C02:
                 self.address_latch = 0
         elif addr == 0x0007:    # ppu data
             self.ppuWrite(self.ppu_address, data)
-            self.ppu_address += 1
+            self.ppu_address += 32 if (self.control & self.CONTROL_INC_MODE > 0) else 1
 
     def ppuRead(self, addr, readonly=False):
         data = 0x00
@@ -162,7 +161,25 @@ class Nes2C02:
         elif addr >= 0x0000 and addr <= 0x1FFF:
             data = self.tblPattern[(addr & 0x1000) >> 12][addr & 0x0FFF]
         elif addr >= 0x2000 and addr <= 0x3EFF:
-            pass
+            addr &= 0x0FFF
+            if self.cart.mirror == self.cart.MIRROR_VERTICAL:
+                if addr >= 0x0000 and addr <= 0x03FF:
+                    data = self.tblName[0][addr & 0x03FF]
+                if addr >= 0x0400 and addr <= 0x07FF:
+                    data = self.tblName[1][addr & 0x03FF]
+                if addr >= 0x0800 and addr <= 0x0BFF:
+                    data = self.tblName[0][addr & 0x03FF]
+                if addr >= 0x0C00 and addr <= 0x0FFF:
+                    data = self.tblName[1][addr & 0x03FF]
+            elif self.cart.mirror == self.cart.MIRROR_HORIZONTAL:
+                if addr >= 0x0000 and addr <= 0x03FF:
+                    data = self.tblName[0][addr & 0x03FF]
+                if addr >= 0x0400 and addr <= 0x07FF:
+                    data = self.tblName[0][addr & 0x03FF]
+                if addr >= 0x0800 and addr <= 0x0BFF:
+                    data = self.tblName[1][addr & 0x03FF]
+                if addr >= 0x0C00 and addr <= 0x0FFF:
+                    data = self.tblName[1][addr & 0x03FF]
         elif addr >= 0x3F00 and addr <= 0x3FFF:
             addr &= 0x001F
             if addr == 0x0010:
@@ -185,7 +202,25 @@ class Nes2C02:
         elif addr >= 0x0000 and addr <= 0x1FFF:
             self.tblPattern[(addr & 0x1000) >> 12][addr & 0x0FFF] = data
         elif addr >= 0x2000 and addr <= 0x3EFF:
-            pass
+            addr &= 0x0FFF
+            if self.cart.mirror == self.cart.MIRROR_VERTICAL:
+                if addr >= 0x0000 and addr <= 0x03FF:
+                    self.tblName[0][addr & 0x03FF] = data
+                if addr >= 0x0400 and addr <= 0x07FF:
+                    self.tblName[1][addr & 0x03FF] = data
+                if addr >= 0x0800 and addr <= 0x0BFF:
+                    self.tblName[0][addr & 0x03FF] = data
+                if addr >= 0x0C00 and addr <= 0x0FFF:
+                    self.tblName[1][addr & 0x03FF] = data
+            elif self.cart.mirror == self.cart.MIRROR_HORIZONTAL:
+                if addr >= 0x0000 and addr <= 0x03FF:
+                    self.tblName[0][addr & 0x03FF] = data
+                if addr >= 0x0400 and addr <= 0x07FF:
+                    self.tblName[0][addr & 0x03FF] = data
+                if addr >= 0x0800 and addr <= 0x0BFF:
+                    self.tblName[1][addr & 0x03FF] = data
+                if addr >= 0x0C00 and addr <= 0x0FFF:
+                    self.tblName[1][addr & 0x03FF] = data
         elif addr >= 0x3F00 and addr <= 0x3FFF:
             addr &= 0x001F
             if addr == 0x0010:
@@ -209,8 +244,8 @@ class Nes2C02:
             self.status |= self.STATUS_VERTBLANK
             if self.control & self.CONTROL_ENABLE_NMI > 0:
                 self.nmi = True
-        import random
-        self.sprScreen.set_at((self.cycle - 1, self.scanline), self.palScreen[0x3F] if random.randint(0, 1) == 0 else self.palScreen[0x30])
+        # import random
+        # self.sprScreen.set_at((self.cycle - 1, self.scanline), self.palScreen[0x3F] if random.randint(0, 1) == 0 else self.palScreen[0x30])
         self.cycle += 1
         if self.cycle >= 341:
             self.cycle = 0
