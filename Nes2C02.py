@@ -22,6 +22,12 @@ class Nes2C02:
     CONTROL_SPR_SIZE   = (1 << 5)
     CONTROL_SLAVE_MODE = (1 << 6)   # unused
     CONTROL_ENABLE_NMI = (1 << 7)
+
+    LOOPY_COARSE_X     = 0x001F
+    LOOPY_COARSE_Y     = 0x03E0
+    LOOPY_NAMETBL_X    = 0x0400
+    LOOPY_NAMETBL_Y    = 0x0800
+    LOOPY_FINE_Y       = 0x7000
     def __init__(self):
         self.cart = None
 
@@ -37,6 +43,20 @@ class Nes2C02:
         self.ppu_data_buffer = 0
         self.ppu_address = 0x0000
         self.nmi = False
+        self.vram_addr = 0x0000 # loopy register
+        self.tram_addr = 0x0000 # loopy register
+        self.fine_x = 0x00
+
+        self.bg_next_tile_id = 0x00
+        self.bg_next_tile_attrib = 0x00
+        self.bg_next_tile_lsb = 0x00
+        self.bg_next_tile_msb = 0x00
+
+        self.bg_shifter_pattern_lo = 0x0000
+        self.bg_shifter_pattern_hi = 0x0000
+        self.bg_shifter_attrib_lo = 0x0000
+        self.bg_shifter_attrib_hi = 0x0000
+        
 
         # For visualizing the state of the ppu
         import pygame
@@ -52,6 +72,22 @@ class Nes2C02:
         self.frame_complete = False
         self.scanline = 0
         self.cycle = 0
+    @property
+    def vram_addr_coarse_x(self):
+        return self.vram_addr & self.LOOPY_COARSE_X
+    @property
+    def vram_addr_coarse_y(self):
+        return (self.vram_addr & self.LOOPY_COARSE_Y) >> 5
+    @property
+    def vram_addr_nametbl_x(self):
+        return 1 if (self.vram_addr & self.LOOPY_NAMETBL_X) > 0 else 0
+    @property
+    def vram_addr_nametbl_y(self):
+        return 1 if (self.vram_addr & self.LOOPY_NAMETBL_Y) > 0 else 0
+    @property
+    def vram_addr_fine_y(self):
+        return (self.vram_addr & self.LOOPY_FINE_Y) >> 12
+
     def GetScreen(self):
         return self.sprScreen
     def GetNameTable(self, i):
@@ -118,18 +154,26 @@ class Nes2C02:
                 pass
             elif addr == 0x0007:    # ppu data
                 data = self.ppu_data_buffer
-                self.ppu_data_buffer = self.ppuRead(self.ppu_address)
+                self.ppu_data_buffer = self.ppuRead(self.vram_addr)
 
-                if self.ppu_address > 0x3F00:
+                if self.vram_addr > 0x3F00:
                     data = self.ppu_data_buffer
 
-                self.ppu_address += 1
+                self.vram_addr += 32 if (self.control & self.CONTROL_INC_MODE > 0) else 1
         # print("  (PPU) returning 0x%02X" % (data))
         return data
 
     def cpuWrite(self, addr, data):
         if addr == 0x0000:      # control
             self.control = data
+            if self.control & self.CONTROL_NAMETBL_X > 0:
+                self.tram_addr |= self.LOOPY_NAMETBL_X
+            else:
+                self.tram_addr &= ~self.LOOPY_NAMETBL_X
+            if self.control & self.CONTROL_NAMETBL_Y > 0:
+                self.tram_addr |= self.LOOPY_NAMETBL_Y
+            else:
+                self.tram_addr &= ~self.LOOPY_NAMETBL_Y
         elif addr == 0x0001:    # mask
             self.mask = data
         elif addr == 0x0002:    # status
@@ -139,17 +183,25 @@ class Nes2C02:
         elif addr == 0x0004:    # oam data
             pass
         elif addr == 0x0005:    # scroll
-            pass
-        elif addr == 0x0006:    # ppu address
             if self.address_latch == 0:
-                self.ppu_address = (self.ppu_address & 0x00FF) | (data << 8)
+                self.fine_x = data & 0x07
+                self.tram_addr = (self.tram_addr & ~self.LOOPY_COARSE_X) | (data >> 3)
                 self.address_latch = 1
             else:
-                self.ppu_address = (self.ppu_address & 0xFF00) | data
+                self.fine_y = data & 0x07
+                self.tram_addr = (self.tram_addr & ~self.LOOPY_COARSE_Y) | ((data >> 3) << 5)
+                self.address_latch = 0
+        elif addr == 0x0006:    # ppu address
+            if self.address_latch == 0:
+                self.tram_addr = (self.tram_addr & 0x00FF) | (data << 8)
+                self.address_latch = 1
+            else:
+                self.tram_addr = (self.tram_addr & 0xFF00) | data
+                self.vram_addr = self.tram_addr
                 self.address_latch = 0
         elif addr == 0x0007:    # ppu data
-            self.ppuWrite(self.ppu_address, data)
-            self.ppu_address += 32 if (self.control & self.CONTROL_INC_MODE > 0) else 1
+            self.ppuWrite(self.vram_addr, data)
+            self.vram_addr += 32 if (self.control & self.CONTROL_INC_MODE > 0) else 1
 
     def ppuRead(self, addr, readonly=False):
         data = 0x00
@@ -236,16 +288,127 @@ class Nes2C02:
     def ConnectCartridge(self, cartridge):
         self.cart = cartridge
 
+    def IncrementScrollX(self):
+        if self.mask & self.MASK_RENDER_BKGD > 0 or self.mask & self.MASK_RENDER_SPR > 0:
+            if self.vram_addr_coarse_x == 31:
+                self.vram_addr &= ~self.LOOPY_COARSE_X
+                if self.vram_addr_nametbl_x:
+                    self.vram_addr &= ~self.LOOPY_NAMETBL_X
+                else:
+                    self.vram_addr |= self.LOOPY_NAMETBL_X
+            else:
+                c = self.vram_addr_coarse_x + 1
+                self.vram_addr = (self.vram_addr & ~self.LOOPY_COARSE_X) | c
+
+    def IncrementScrollY(self):
+        if self.mask & self.MASK_RENDER_BKGD > 0 or self.mask & self.MASK_RENDER_SPR > 0:
+            if self.vram_addr_fine_y < 7:
+                c = self.vram_addr_fine_y + 1
+                self.vram_addr = (self.vram_addr & ~self.LOOPY_FINE_Y) | (c << 12)
+            else:
+                self.vram_addr &= ~self.LOOPY_FINE_Y
+
+                if self.vram_addr_coarse_y == 29:
+                    self.vram_addr &= ~self.LOOPY_COARSE_Y
+                    if self.vram_addr_nametbl_x:
+                        self.vram_addr &= ~self.LOOPY_NAMETBL_X
+                    else:
+                        self.vram_addr |= self.LOOPY_NAMETBL_X
+                elif self.vram_addr_coarse_y == 31:
+                    self.vram_addr &= ~self.LOOPY_COARSE_Y
+                else:
+                    c = self.vram_addr_coarse_y + 1
+                    self.vram_addr = (self.vram_addr & ~self.LOOPY_COARSE_Y) | (c << 5)
+
+    def TransferAddressX(self):
+        if self.mask & self.MASK_RENDER_BKGD > 0 or self.mask & self.MASK_RENDER_SPR > 0:
+            self.vram_addr = (self.vram_addr & ~self.LOOPY_NAMETBL_X) | (self.tram_addr & self.LOOPY_NAMETBL_X)
+            self.vram_addr = (self.vram_addr & ~self.LOOPY_COARSE_X)  | (self.tram_addr & self.LOOPY_COARSE_X)
+
+    def TransferAddressY(self):
+        if self.mask & self.MASK_RENDER_BKGD > 0 or self.mask & self.MASK_RENDER_SPR > 0:
+            self.vram_addr = (self.vram_addr & ~self.LOOPY_FINE_Y) | (self.tram_addr & self.LOOPY_FINE_Y)
+            self.vram_addr = (self.vram_addr & ~self.LOOPY_NAMETBL_Y) | (self.tram_addr & self.LOOPY_NAMETBL_Y)
+            self.vram_addr = (self.vram_addr & ~self.LOOPY_COARSE_Y)  | (self.tram_addr & self.LOOPY_COARSE_Y)
+
+    def LoadBackgroundShifters(self):
+        self.bg_shifter_pattern_lo = (self.bg_shifter_pattern_lo & 0xFF00) | self.bg_next_tile_lsb
+        self.bg_shifter_pattern_hi = (self.bg_shifter_pattern_hi & 0xFF00) | self.bg_next_tile_msb
+        self.bg_shifter_attrib_lo = (self.bg_shifter_attrib_lo & 0xFF00) | (0xFF if (self.bg_next_tile_attrib & 0x01) > 0 else 0x00)
+        self.bg_shifter_attrib_hi = (self.bg_shifter_attrib_hi & 0xFF00) | (0xFF if (self.bg_next_tile_attrib & 0x02) > 0 else 0x00)
+
+    def UpdateShifters(self):
+        if self.mask & self.MASK_RENDER_BKGD:
+            self.bg_shifter_pattern_lo <<= 1
+            self.bg_shifter_pattern_hi <<= 1
+            self.bg_shifter_attrib_lo <<= 1
+            self.bg_shifter_attrib_hi <<= 1
+        
+
     def clock(self):
-        if self.scanline == -1 and self.cycle == 1:
-            self.status &= ~self.STATUS_VERTBLANK
+        if self.scanline >= -1 and self.scanline < 240:
+            if self.scanline == -1 and self.cycle == 1:
+                self.status &= ~self.STATUS_VERTBLANK
+            if (self.cycle >=2 and self.cycle < 258) or (self.cycle >= 321 and self.cycle < 338):
+                self.UpdateShifters()
+                cycle = (self.cycle - 1) % 8
+                if cycle == 0:
+                    self.LoadBackgroundShifters()
+                    self.bg_next_tile_id = self.ppuRead(0x2000 | (self.vram_addr & 0x0FFF))
+                elif cycle == 2:
+                    self.bg_next_tile_attrib = self.ppuRead(0x23C0 | (self.vram_addr_nametbl_y << 11)
+                        | (self.vram_addr_nametbl_x << 10)
+                        | ((self.vram_addr_coarse_y >> 2) << 3)
+                        | (self.vram_addr_coarse_x >> 2))
+                    if self.vram_addr_coarse_y & 0x02 > 0:
+                        self.bg_next_tile_attrib >>= 4
+                    if self.vram_addr_coarse_x & 0x02 > 0:
+                        self.bg_next_tile_attrib >>= 2
+                    self.bg_next_tile_attrib &= 0x03
+                elif cycle == 4:
+                    self.bg_next_tile_lsb = self.ppuRead((1 << 12 if (self.control & self.CONTROL_PATT_BKGD > 0) else 0)
+                        + (self.bg_next_tile_id << 4)
+                        + (self.vram_addr_fine_y))
+                elif cycle == 6:
+                    self.bg_next_tile_msb = self.ppuRead((1 << 12 if (self.control & self.CONTROL_PATT_BKGD > 0) else 0)
+                        + (self.bg_next_tile_id << 4)
+                        + (self.vram_addr_fine_y) + 8)
+                elif cycle == 7:
+                    self.IncrementScrollX()
+                    
+            if self.cycle == 256:
+                self.IncrementScrollY()
+
+            if self.cycle == 257:
+                self.TransferAddressX()
+
+            if self.scanline == -1 and self.cycle >= 280 and self.cycle <= 305:
+                self.TransferAddressY()
+
+        if self.scanline == 240:
+            pass
+        
         if self.scanline == 241 and self.cycle == 1:
             # print("Setting vertblank")
             self.status |= self.STATUS_VERTBLANK
             if self.control & self.CONTROL_ENABLE_NMI > 0:
                 self.nmi = True
-        # import random
-        # self.sprScreen.set_at((self.cycle - 1, self.scanline), self.palScreen[0x3F] if random.randint(0, 1) == 0 else self.palScreen[0x30])
+
+        bg_pixel = 0x00
+        bg_palette = 0x00
+
+        if self.mask & self.MASK_RENDER_BKGD:
+            bit_mux = 0x8000 >> self.fine_x
+
+            p0_pixel = 1 if (self.bg_shifter_pattern_lo & bit_mux) > 0 else 0
+            p1_pixel = 1 if (self.bg_shifter_pattern_hi & bit_mux) > 0 else 0
+            bg_pixel = (p1_pixel << 1) | p0_pixel
+
+            bg_pal0 = 1 if (self.bg_shifter_attrib_lo & bit_mux) > 0 else 0
+            bg_pal1 = 1 if (self.bg_shifter_attrib_hi & bit_mux) > 0 else 0
+            bg_palette = (bg_pal1 << 1) | bg_pal0
+
+        self.sprScreen.set_at((self.cycle - 1, self.scanline), self.GetColorFromPaletteRam(bg_palette, bg_pixel))
         self.cycle += 1
         if self.cycle >= 341:
             self.cycle = 0
